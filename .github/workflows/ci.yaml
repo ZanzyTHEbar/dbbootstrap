@@ -1,0 +1,138 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build, Test, and Vet
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Race test
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+  cross-build:
+    name: Cross Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    runs-on: ubuntu-latest
+    needs: build
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version-file: go.mod
+
+      - name: Build root package
+        run: go build .
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    needs: [build, cross-build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      new_version: ${{ steps.semantic_release.outputs.new_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install semantic-release
+        run: npm install -g semantic-release conventional-changelog-conventionalcommits @semantic-release/exec @semantic-release/git @semantic-release/github @semantic-release/changelog @semantic-release/release-notes-generator
+
+      - name: Release
+        id: semantic_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: semantic-release
+
+  publish-go-docs:
+    name: Publish to Go Package Docs
+    runs-on: ubuntu-latest
+    needs: release
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && needs.release.outputs.new_version != ''
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.2
+        with:
+          go-version-file: go.mod
+
+      - name: Publish module to Go proxy
+        env:
+          VERSION: ${{ needs.release.outputs.new_version }}
+        run: |
+          go mod tidy
+          go test ./...
+          GOPROXY=proxy.golang.org go list -m "github.com/ZanzyTHEbar/dbbootstrap@${VERSION}"
+          GOPROXY=proxy.golang.org go mod download "github.com/ZanzyTHEbar/dbbootstrap@${VERSION}"
+
+      - name: Trigger pkg.go.dev indexing
+        env:
+          VERSION: ${{ needs.release.outputs.new_version }}
+        run: |
+          curl -fsS "https://proxy.golang.org/github.com/zanzythebar/dbbootstrap/@v/${VERSION}.info"
+          curl -fsS "https://pkg.go.dev/github.com/ZanzyTHEbar/dbbootstrap@${VERSION}" >/dev/null || true

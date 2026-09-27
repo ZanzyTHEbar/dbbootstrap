@@ -1,0 +1,56 @@
+{
+  "branches": ["main", "master"],
+  "repositoryUrl": "https://github.com/ZanzyTHEbar/dbbootstrap.git",
+  "tagFormat": "v${version}",
+  "plugins": [
+    [
+      "@semantic-release/commit-analyzer",
+      {
+        "preset": "conventionalcommits",
+        "releaseRules": [
+          { "breaking": true, "release": "major" },
+          { "type": "feat", "release": "minor" },
+          { "type": "fix", "release": "patch" },
+          { "type": "perf", "release": "patch" },
+          { "type": "revert", "release": "patch" },
+          { "type": "docs", "release": "minor" },
+          { "type": "style", "release": "patch" },
+          { "type": "refactor", "release": "patch" },
+          { "type": "test", "release": "patch" },
+          { "type": "build", "release": "patch" },
+          { "type": "ci", "scope": "ci-*", "release": "patch" },
+          { "type": "chore", "release": false },
+          { "type": "no-release", "release": false }
+        ]
+      }
+    ],
+    [
+      "@semantic-release/release-notes-generator",
+      { "preset": "conventionalcommits" }
+    ],
+    [
+      "@semantic-release/changelog",
+      {
+        "changelogFile": "CHANGELOG.md",
+        "changelogTitle": "# Changelog\n\nAll notable changes to this project are documented here."
+      }
+    ],
+    [
+      "@semantic-release/exec",
+      {
+        "publishCmd": "if [ -n \"$GITHUB_OUTPUT\" ]; then echo \"new_version=v${nextRelease.version}\" >> \"$GITHUB_OUTPUT\"; fi"
+      }
+    ],
+    [
+      "@semantic-release/github",
+      { "addReleases": "bottom" }
+    ],
+    [
+      "@semantic-release/git",
+      {
+        "assets": ["CHANGELOG.md"],
+        "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+      }
+    ]
+  ]
+}
