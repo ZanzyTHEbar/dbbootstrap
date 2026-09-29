@@ -184,6 +184,17 @@ DROP TABLE users;
 	}
 }
 
+func TestMigrateRequiresAdapterDialect(t *testing.T) {
+	db := openTestDB(t, &testDriverState{})
+
+	err := db.Migrate(context.Background(), fstest.MapFS{
+		"001_noop.sql": &fstest.MapFile{Data: []byte("-- +goose Up\nSELECT 1;\n")},
+	})
+	if !faults.IsCode(err, faults.CodeConfigInvalid) {
+		t.Fatalf("Migrate() error = %v, want invalid configuration for adapter without a dialect", err)
+	}
+}
+
 func TestTxCommitsOnSuccess(t *testing.T) {
 	state := &testDriverState{}
 	db := openTestDB(t, state)
@@ -219,13 +230,24 @@ func TestTxRollsBackCallbackError(t *testing.T) {
 
 func TestTxJoinsCallbackAndRollbackErrors(t *testing.T) {
 	callbackErr := errors.New("callback failed")
-	rollbackErr := errors.New("rollback failed")
+	rollbackErr := faults.New(faults.CodeValidationFailed, "rollback failed")
 	state := &testDriverState{rollbackErr: rollbackErr}
 	db := openTestDB(t, state)
 
 	err := db.Tx(context.Background(), func(*sql.Tx) error { return callbackErr })
-	if !errors.Is(err, callbackErr) || !faults.IsCode(err, faults.CodeDatabaseWrite) {
-		t.Fatalf("Tx() error = %v, want a database fault wrapping the callback error", err)
+	if !errors.Is(err, callbackErr) || !errors.Is(err, rollbackErr) || !faults.IsCode(err, faults.CodeDatabaseWrite) {
+		t.Fatalf("Tx() error = %v, want a database fault wrapping callback and rollback errors", err)
+	}
+}
+
+func TestTxPreservesCallbackFaultCodeWhenRollbackFails(t *testing.T) {
+	callbackErr := faults.New(faults.CodeValidationFailed, "callback failed")
+	rollbackErr := errors.New("rollback failed")
+	db := openTestDB(t, &testDriverState{rollbackErr: rollbackErr})
+
+	err := db.Tx(context.Background(), func(*sql.Tx) error { return callbackErr })
+	if !errors.Is(err, callbackErr) || !errors.Is(err, rollbackErr) || !faults.IsCode(err, faults.CodeValidationFailed) {
+		t.Fatalf("Tx() error = %v, want both causes and the callback fault code", err)
 	}
 }
 

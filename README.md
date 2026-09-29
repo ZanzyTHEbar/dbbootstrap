@@ -12,6 +12,10 @@ Config -> Open -> Migrate -> SQL/Tx -> Close
 The package keeps `database/sql` visible and leaves repositories, SQL, and
 generated sqlc code to the consuming service.
 
+Custom adapters used with `Migrate` must implement `Dialect() string` and return
+`db.DialectPostgres` or `db.DialectSQLite`. Do not pass typed-nil adapters to
+`db.Open`; Go's interface nil check does not detect them.
+
 ## Install
 
 ```bash

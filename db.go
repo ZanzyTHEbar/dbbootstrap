@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io/fs"
 	"time"
 
@@ -23,13 +24,14 @@ type Config struct {
 	ConnMaxIdleTime time.Duration
 }
 
-// Adapter opens a database/sql pool and provides its health check.
+// Adapter opens a database/sql pool and provides its health check. Adapters used
+// with DB.Migrate must also implement Dialect() string and return a supported
+// migration dialect.
 type Adapter interface {
 	Open(context.Context, Config) (*sql.DB, error)
 	Ping(context.Context, *sql.DB) error
 }
 
-// Adapters may implement Dialect() string to select the migration dialect.
 type dialectAdapter interface {
 	Dialect() string
 }
@@ -42,6 +44,7 @@ type DB struct {
 }
 
 // Open creates a database pool, applies its settings, and verifies connectivity.
+// Callers must not pass a typed-nil adapter; only a nil interface is detected.
 func Open(ctx context.Context, cfg Config, adapter Adapter) (*DB, error) {
 	if adapter == nil {
 		return nil, faults.New(faults.CodeConfigInvalid, "database adapter is nil")
@@ -64,7 +67,7 @@ func Open(ctx context.Context, cfg Config, adapter Adapter) (*DB, error) {
 		return nil, wrapFault(faults.CodeDatabaseRead, "ping database", err)
 	}
 
-	dialect := DialectPostgres
+	var dialect string
 	if dialectAdapter, ok := adapter.(dialectAdapter); ok {
 		dialect = dialectAdapter.Dialect()
 	}
@@ -91,7 +94,8 @@ func (db *DB) Ping(ctx context.Context) error {
 	return nil
 }
 
-// Migrate applies pending SQL migrations from migrations.
+// Migrate applies pending SQL migrations from migrations. The adapter must
+// implement Dialect() string and return a supported migration dialect.
 func (db *DB) Migrate(ctx context.Context, migrations fs.FS) error {
 	if migrations == nil {
 		return faults.New(faults.CodeConfigInvalid, "migration filesystem is nil")
@@ -105,9 +109,6 @@ func (db *DB) Migrate(ctx context.Context, migrations fs.FS) error {
 	provider, err := newGooseProvider(db.sql, migrations, dialect)
 	if err != nil {
 		return wrapFault(faults.CodeConfigInvalid, "create migration provider", err)
-	}
-	if err := ensureGooseVersionTable(ctx, db.sql, dialect); err != nil {
-		return wrapFault(faults.CodeDatabaseWrite, "initialize migration tracking", err)
 	}
 	if _, err := provider.Up(ctx); err != nil {
 		return wrapFault(faults.CodeDatabaseWrite, "migrate database", err)
@@ -134,10 +135,14 @@ func (db *DB) Tx(ctx context.Context, fn func(*sql.Tx) error) error {
 
 	if err := fn(tx); err != nil {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return wrapFault(
-				faults.CodeDatabaseWrite,
+			code := faults.CodeDatabaseWrite
+			if callbackCode := faults.CodeOf(err); callbackCode != faults.CodeUnknown {
+				code = callbackCode
+			}
+			return faults.Wrap(
+				code,
 				"transaction callback failed and rollback failed",
-				err,
+				errors.Join(err, rollbackErr),
 				"rollback_error", rollbackErr,
 			)
 		}
