@@ -16,7 +16,7 @@ type adapter struct {
 
 // New returns a libsql-client-go adapter.
 func New(options ...client.Option) db.Adapter {
-	return adapter{options: options}
+	return adapter{options: append([]client.Option(nil), options...)}
 }
 
 func (a adapter) Open(_ context.Context, cfg db.Config) (*sql.DB, error) {
